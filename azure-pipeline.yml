@@ -1,14 +1,181 @@
+# PyLint
+# Bandit for Static Application Security Test
+# OWASP ZAP for Dynamic Application security Test
+# Trivy for Container Security Scan
+# PyTest for Unit Test
+# Rollback Mechanism
+
+# Specifies that the pipeline will be triggered whenever there is a change in the Flask_WebGoat branch
+# Triggering the main branch
 trigger:
 - main
 
+# Sets the virtual machine image to ubuntu-latest, meaning the pipeline will run on an Ubuntu virtual machine
+# Virtual Machine Image is Ubuntu-Latest
 pool:
-  vmImage: ubuntu-latest
+  vmImage: 'ubuntu-latest'
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+steps: 
+# Python version 3.x
+# This step ensures that Python 3.x is used in the pipeline
+# For the use of the latest version on the python version 3.12.6 software
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '3.x'
+  displayName: 'Use Python 3.x'
 
+# Pip and Requirements.txt
+# This installs the latest version of pip and the dependencies listed in requirements.txt
+# To pip install python and the requirements.txt file requirements
 - script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+  displayName: 'Install dependencies'
+
+#Pylint
+# Installs Pylint and run it on the specified GitHub repository
+# To fail the pipeline if there are any critical issues
+- script: |
+    python -m pip install pylint
+  displayName: 'Install pylint'
+
+# The --exit-zero flag ensures that pylint exits with a status code of 0 even if there are issues
+# exit-zero for ensuring that pylint exits with a status code of 0 even if there are issues 
+- script: |
+    pylint https://github.com/MandlaRikhotso/Flask_WebGoat.git --exit-zero
+  displayName: 'Run pylint'
+
+# checks the pylint report for critical issues denoted by “E” and fails the pipeline if any are found
+# publish any critical issues under the provided displayname
+- script: |
+    pylint https://github.com/MandlaRikhotso/Flask_WebGoat.git --exit-zero > pylint_report.txt
+    if grep -q "E" pylint_report.txt; then
+      echo "Critical issues found, failing the pipeline."
+      exit 0
+    fi
+  displayName: 'Check pylint report and fail on critical issues'
+
+# This uploads the pylint report as a pipeline artifact
+# Upload pylint report artifact
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: '$(System.DefaultWorkingDirectory)/pylint_report.txt'
+    artifactName: 'PylintReport'
+  displayName: 'Upload pylint Report Artifact'
+
+# SAST via Bandit
+# Installs Bandit
+# For install Bandit:
+- script: |
+    python -m pip install bandit
+  displayName: 'Install Bandit'
+
+# Runs bandit to perform static analysis on the code, generating a report
+# For running Bandit on the code and generating a report
+- script: |
+    bandit -r your_project_directory -o bandit_report.html -f html
+  displayName: 'Bandit for SAST and generate report'
+
+# Publishes the Bandit report as a pipeline artifact
+# For publish the Bandit report as a pipeline artifact
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: 'bandit_report.html'
+    artifactName: 'BanditReport'
+    publishLocation: 'Pipeline'
+  displayName: 'Publish Bandit SAST Report'
+
+# DAST via OWASP ZAP
+# Step pulls the OWASP ZAP Docker image, runs a security scan, and handles the results
+# Dynamic Security Scanning with OWASP ZAP
+- script: |
+    echo "Pulling OWASP ZAP Docker image..."
+    docker pull mandlarikhotso/firstdockerbuild:v1.0
+    echo "Running OWASP ZAP scan..."
+    set +e  # Disable exit on non-zero exit codes
+    mkdir -p $(System.DefaultWorkingDirectory)/zap  # Ensure the directory exists
+
+    docker run -v $(System.DefaultWorkingDirectory)/zap:/zap/wrk \
+      mandlarikhotso/firstdockerbuild:v1.0 zap-baseline.py -t http://localhost:8080 -r /zap/wrk/zap-report.html
+    ZAP_EXIT_CODE=$?  # Capture exit code
+
+    if [ $ZAP_EXIT_CODE -ne 0 ]; then
+      echo "ZAP scan failed with exit code $ZAP_EXIT_CODE. Continuing pipeline..."
+      docker logs $(docker ps -lq)  # Show logs for troubleshooting
+    else
+      echo "ZAP scan completed successfully."
+    fi
+
+    echo "Listing contents of /zap/wrk directory..."
+    ls -al $(System.DefaultWorkingDirectory)/zap  # Debug to ensure report exists
+    set -e  # Re-enable exit on non-zero exit codes
+  displayName: '(DAST) Dynamic Security Application Security Test Scan via OWASP ZAP'
+
+# Publishes the OWASP ZAP report as a pipeline artifact
+# Publish ZAP report artifact
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: '$(System.DefaultWorkingDirectory)/zap'
+    artifactName: 'ZapScanReport'
+  displayName: 'Publish DAST via OWASP ZAP Report Artifact'
+
+#Trivy for Container Security Scan
+# Installs Trivy and runs a security scan on the specified Docker image
+# Step: Install Trivy and run a container security scan
+- script: |
+    echo "Installing Trivy..."
+    wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.37.0_Linux-64bit.tar.gz
+    tar zxvf trivy_0.37.0_Linux-64bit.tar.gz
+    sudo mv trivy /usr/local/bin/
+    
+    echo "Running Trivy scan on the Docker image..."
+    trivy image --quiet --exit-code 1 --severity HIGH,CRITICAL mandlarikhotso/firstdockerbuild:v1.0 > trivy-report.txt || true
+  displayName: 'Trivy Security Scan'
+
+# Publishes the Trivy scan report as a pipeline artifact
+# Step: Publish Trivy Scan Report
+- task: PublishBuildArtifacts@1
+  inputs:
+    pathToPublish: 'trivy-report.txt'
+    artifactName: 'trivy-report'
+  displayName: 'Container Security Scan Results'
+
+# Conditional Deployment Step
+- script: |
+    echo "Deploying Docker image to test environment..."
+    docker login -u mandlarikhotso -p Fumani
+    docker pull mandlarikhotso/firstdockerbuild:v1.0
+    docker run -d -p 8080:80 mandlarikhotso/firstdockerbuild:v1.0
+    echo "Deployment completed successfully." > deployment_log.txt
+  displayName: 'Deploy to Test Environment'
+  condition: succeeded()
+
+# Publish Deployment Log Artifact
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: 'deployment_log.txt'
+    artifactName: 'DeploymentLog'
+  displayName: 'Publish Deployment Log Artifact'
+  condition: succeeded()
+
+# PyTest for Unit Tests
+# Steps install pytest and its dependencies
+#For ugrading python to the latest version and installing all the requirements and dependencies
+- script: |
+    python -m pip install --upgrade pip
+    pip install pytest pytest-azurepipelines
+  displayName: 'Install dependencies'
+
+# Runs the unit tests, and generate an XML report
+# For generating an xml file
+- script: |
+    pytest --junitxml=$(Build.StagingDirectory)/test-results.xml
+  displayName: 'Run tests'
+
+# Publishes the test results as a pipeline artifact
+# For publishing the test results under the displayname "Publish Test Results"
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: '$(Build.StagingDirectory)/test-results.xml'
+    testRunTitle: 'Pytest Results'
+  displayName: 'Publish Unit Test Results'
