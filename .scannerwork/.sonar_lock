@@ -1,0 +1,5 @@
+sonar.projectKey=Sonar
+sonar.projectName=My First SonarQube Project
+sonar.projectVersion=1.0
+sonar.host.url=http://zaomrtfv005:9900
+sonar.login=fe9c09e822d569733a5e691658f4271d3bdf9a1c
